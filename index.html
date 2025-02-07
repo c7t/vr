@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>VR HDR Viewer with Eye Adaptation</title>
+        <style>
+         body { margin: 0; }
+         #vrButton {
+             position: absolute;
+             bottom: 20px;
+             left: 50%;
+             transform: translateX(-50%);
+             padding: 12px 24px;
+             background: #ffffff;
+             border: none;
+             border-radius: 4px;
+             cursor: pointer;
+         }
+        </style>
+    </head>
+    <body>
+        <button id="vrButton">Enter VR</button>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/RGBELoader.js"></script>
+        <script>
+         let currentSession = null;
+         let luminanceRenderTarget;
+         let luminanceCamera;
+         let currentLuminance = 1.0;
+         const adaptationRate = 0.5; // Speed of adaptation (0-1)
+
+         // Set up scene
+         const scene = new THREE.Scene();
+
+         // Set up main camera
+         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+         camera.position.set(0, 1.6, 0);
+
+         // Set up luminance sampling camera (wide FOV)
+         luminanceCamera = new THREE.PerspectiveCamera(20, 1, 0.1, 1000);
+         luminanceCamera.position.set(0, 1.6, 0);
+
+         // Set up renderer with HDR and WebXR support
+         const renderer = new THREE.WebGLRenderer({ antialias: true });
+         renderer.setSize(window.innerWidth, window.innerHeight);
+         renderer.xr.enabled = true;
+         renderer.toneMapping = THREE.ACESFilmicToneMapping;
+         renderer.toneMappingExposure = 1.0;
+         renderer.outputEncoding = THREE.sRGBEncoding;
+         document.body.appendChild(renderer.domElement);
+
+         // Create small render target for luminance sampling
+         luminanceRenderTarget1 = new THREE.WebGLRenderTarget(16, 16, {
+             type: THREE.FloatType,
+             format: THREE.RGBAFormat,
+             minFilter: THREE.NearestFilter,
+             magFilter: THREE.NearestFilter
+         });
+
+         luminanceRenderTarget2 = new THREE.WebGLRenderTarget(16, 16, {
+             type: THREE.FloatType,
+             format: THREE.RGBAFormat,
+             minFilter: THREE.NearestFilter,
+             magFilter: THREE.NearestFilter
+         });
+
+         let currentLuminanceTarget = luminanceRenderTarget1;
+         let displayLuminanceTarget = luminanceRenderTarget2;
+
+         // Create debug quad for luminance display
+         // const debugQuadGeometry = new THREE.PlaneGeometry(0.2, 0.2);
+         // const debugQuadMaterial = new THREE.MeshBasicMaterial({
+         //     map: displayLuminanceTarget.texture,
+         //     side: THREE.DoubleSide
+         // });
+         // const debugQuad = new THREE.Mesh(debugQuadGeometry, debugQuadMaterial);
+         // debugQuad.position.set(0.3, -0.2, -0.5); // Position in view space
+         // camera.add(debugQuad); // Add to camera so it moves with view
+         scene.add(camera);
+         // Create sphere
+         const geometry = new THREE.SphereGeometry(50, 60, 40);
+         geometry.scale(-1, 1, 1);
+
+         // Load HDR texture
+         const rgbeLoader = new THREE.RGBELoader();
+         rgbeLoader.setDataType(THREE.FloatType);
+         rgbeLoader.load('room.hdr', function(texture) {
+             const material = new THREE.MeshBasicMaterial({ map: texture });
+             const sphere = new THREE.Mesh(geometry, material);
+             scene.add(sphere);
+         });
+
+
+         function updateCameraFromXRView(camera, view) {
+             // Step 1: Update the camera's position and orientation
+             const transform = view.transform;
+
+             // Extract the position and orientation from the transform
+             const position = transform.position; // DOMPointReadOnly
+             const orientation = transform.orientation; // DOMPointReadOnly (quaternion)
+
+             // Update the camera position
+             // camera.position.set(position.x, position.y, position.z);
+
+             // Update the camera quaternion (orientation)
+             camera.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
+
+             // Step 2: Update the camera's projection matrix
+             // camera.projectionMatrix.fromArray(view.projectionMatrix);
+
+             // Ensure the camera matrix is marked as updated
+             // camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+             camera.matrixWorld.compose(camera.position, camera.quaternion, camera.scale);
+             // camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+             // camera.updateProjectionMatrix();
+         }
+
+         function updateCameraFromCameraDEBUG(out_camera, in_camera) {
+             // Step 1: Update the camera's position and orientation
+
+             // Extract the position and orientation from the transform
+             const position = camera.position; // DOMPointReadOnly
+             const orientation = camera.quaternion; // DOMPointReadOnly (quaternion)
+
+             // Update the camera position
+             camera.position.set(position.x, position.y, position.z);
+
+             // Update the camera quaternion (orientation)
+             out_camera.quaternion.set(orientation.x, orientation.y, orientation.z, orientation.w);
+
+             // Step 2: Update the camera's projection matrix
+             // camera.projectionMatrix.fromArray(view.projectionMatrix);
+
+             // Ensure the camera matrix is marked as updated
+             // camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+             out_camera.matrixWorld.compose(out_camera.position, out_camera.quaternion, out_camera.scale);
+             // camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+         }
+
+         // Function to sample scene luminance
+         function sampleLuminance(camera) {
+             // Update luminance camera to match current view
+             // luminanceCamera <- camera
+
+             // Render to small target
+             const currentRT = renderer.getRenderTarget();
+             const currentXR = renderer.xr.enabled;
+
+             renderer.xr.enabled = false;
+             renderer.setRenderTarget(currentLuminanceTarget);
+             renderer.render(scene, camera);
+             // console.log(debugQuadTexture);
+             // renderer.copyFramebufferToTexture(new THREE.Vector2(), debugQuadTexture);
+             // debugQuadTexture = luminanceRenderTarget.texture;
+
+             // Sum center of view for center-weighted exposure
+
+             // Read center pixels
+             const buffer = new Float32Array(16 * 16 * 4);
+             renderer.readRenderTargetPixels(
+                 currentLuminanceTarget,
+                 0, 0,    // All pixels
+                 16, 16,  // 16x16 area
+                 buffer
+             );
+
+             // Sum window's rgb
+             let red = 0;
+             let green = 0;
+             let blue = 0;
+             for (let i = 0; i < buffer.length; i += 4) {
+                 red += buffer[i];
+                 green += buffer[i + 1];
+                 blue += buffer[i + 2];
+             }
+             red /= 256;
+             green /= 256;
+             blue /= 256;
+
+             // Swap targets
+             [currentLuminanceTarget, displayLuminanceTarget] = [displayLuminanceTarget, currentLuminanceTarget];
+             // debugQuadMaterial.map = displayLuminanceTarget.texture;
+             // debugQuadMaterial.needsUpdate = true;
+
+             renderer.setRenderTarget(currentRT);
+             renderer.xr.enabled = currentXR;
+
+             // Calculate perceived brightness (rough approximation)
+             return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+         }
+
+         // WebXR session management
+         async function onButtonClick() {
+             if (!currentSession) {
+                 const sessionInit = {
+                     optionalFeatures: ['local-floor', 'bounded-floor'],
+                     // requiredFeatures: ['gamepad']
+                 };
+                 try {
+                     currentSession = await navigator.xr.requestSession('immersive-vr', sessionInit);
+                     renderer.xr.setSession(currentSession);
+                     vrButton.textContent = 'Exit VR';
+
+                     xrRefSpace = await currentSession.requestReferenceSpace('local');
+                     xrSession = currentSession;
+                     currentSession.addEventListener('end', onSessionEnd);
+                     currentSession.requestAnimationFrame(onXRAnimationFrame);
+                 } catch (error) {
+                     console.error('Failed to create VR session:', error);
+                 }
+             } else {
+                 currentSession.end();
+             }
+         }
+
+         function onSessionEnd() {
+             currentSession = null;
+             vrButton.textContent = 'Enter VR';
+             renderer.setAnimationLoop(null);
+         }
+
+         // Check for WebXR support
+         if (navigator.xr) {
+             navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+                 if (supported) {
+                     const vrButton = document.getElementById('vrButton');
+                     vrButton.addEventListener('click', onButtonClick);
+                     vrButton.disabled = false;
+                 } else {
+                     console.error('VR not supported');
+                 }
+             });
+         }
+
+         // Render loop with adaptive exposure
+         let xrSession = null;
+         let xrRefSpace = null;
+
+         // Camera state
+         const cameraState = {
+             longitude: 0,
+             latitude: 0,
+             zoom: 75,
+             exposure: 0.18  // Added exposure control
+         };
+
+         // Add mouse controls
+         let isDragging = false;
+         let previousMouseX = 0;
+         let previousMouseY = 0;
+         const BASE_FOV = 75;
+
+         document.addEventListener('mousedown', (e) => {
+             isDragging = true;
+             previousMouseX = e.clientX;
+             previousMouseY = e.clientY;
+         });
+
+         document.addEventListener('mousemove', (e) => {
+             if (!isDragging) return;
+
+             const deltaX = e.clientX - previousMouseX;
+             const deltaY = e.clientY - previousMouseY;
+
+             const rotationScale = Math.tan(THREE.MathUtils.degToRad(cameraState.zoom) / 2) /
+             Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2);
+
+             cameraState.longitude += deltaX * (rotationScale / 500);
+             cameraState.latitude += deltaY * (rotationScale / 500);
+
+             cameraState.latitude = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, cameraState.latitude));
+
+             camera.rotation.set(0, 0, 0);
+             camera.rotateY(cameraState.longitude);
+             camera.rotateX(cameraState.latitude);
+
+             previousMouseX = e.clientX;
+             previousMouseY = e.clientY;
+         });
+
+         document.addEventListener('mouseup', () => {
+             isDragging = false;
+         });
+
+         // Add zoom control with mouse wheel
+         document.addEventListener('wheel', (e) => {
+             e.preventDefault();
+
+             if (e.shiftKey) {
+                 // Shift + wheel adjusts exposure
+                 cameraState.exposure -= e.deltaY * 0.001;
+                 cameraState.exposure = Math.max(0.001, Math.min(10.0, cameraState.exposure));
+                 // renderer.toneMappingExposure = cameraState.exposure;
+                 console.log(`Luminance: wheel ${cameraState.exposure} eye ${currentLuminance} product ${cameraState.exposure * currentLuminance}`);
+             } else {
+                 // Normal wheel adjusts zoom
+                 cameraState.zoom += e.deltaY * 0.05;
+                 cameraState.zoom = Math.max(30, Math.min(90, cameraState.zoom));
+                 camera.fov = cameraState.zoom;
+                 camera.updateProjectionMatrix();
+             }
+         }, { passive: false });
+
+         // Handle window resize
+         window.addEventListener('resize', () => {
+             camera.aspect = window.innerWidth / window.innerHeight;
+             camera.updateProjectionMatrix();
+             renderer.setSize(window.innerWidth, window.innerHeight);
+         });
+
+         logging_count = 0;
+
+         function onWindowAnimationFrame(time) {
+             window.requestAnimationFrame(onWindowAnimationFrame);
+
+             // This may be called while an immersive session is running on some devices,
+             // such as a desktop with a tethered headset. To prevent two loops from
+             // rendering in parallel, skip drawing in this one until the session ends.
+             if (!xrSession) {
+                 renderFrame(time, null);
+             }
+         }
+
+         // The window animation loop can be started immediately upon the page loading.
+         window.requestAnimationFrame(onWindowAnimationFrame);
+
+         function onXRAnimationFrame(time, xrFrame) {
+             xrSession.requestAnimationFrame(onXRAnimationFrame);
+             renderFrame(time, xrFrame);
+         }
+
+         function renderFrame(time, xrFrame) {
+             if (xrFrame) {
+                 const session = xrFrame.session;
+                 // Check for exit button presses
+                 // FIXME:             const sources = session.inputSources;
+                 // FIXME:             for (let source of sources) {
+                 // FIXME:                 if (source.gamepad && (
+                 // FIXME:                     source.gamepad.buttons[0]?.pressed ||
+                 // FIXME:                     source.gamepad.buttons[1]?.pressed ||
+                 // FIXME:                     source.gamepad.buttons[4]?.pressed
+                 // FIXME:                 )) {
+                 // FIXME:                     session.end();
+                 // FIXME:                     return;
+                 // FIXME:                 }
+                 // FIXME:             }
+                 if (xrRefSpace) {
+                     const pose = xrFrame.getViewerPose(xrRefSpace);
+                     if (pose) {
+                         // Sample luminance from current view direction
+                         // const luminance = sampleLuminance(pose.views[0]);
+                         // Update luminance camera to match current view
+                         updateCameraFromXRView(luminanceCamera, pose.views[0]);
+                     }
+                 }
+             }
+             // if (!xrFrame) { luminanceCamera = camera; }
+             if (!xrFrame) {
+                 updateCameraFromCameraDEBUG(luminanceCamera, camera);
+             }
+
+             // Sample luminance from current view direction
+             // const luminance = xrFrame ? sampleLuminance(luminanceCamera) : sampleLuminance(camera);
+             const luminance = sampleLuminance(luminanceCamera);
+             logging_count++;
+             logging_count %= 60;
+             if (!logging_count) { console.log(`sampled luminance ${luminance} target luminance ${cameraState.exposure}`); }
+
+             // Smoothly adapt exposure
+             const targetLuminance = cameraState.exposure;
+             const error = luminance - targetLuminance;
+             const targetExposure = currentLuminance - error;
+             currentLuminance = THREE.MathUtils.lerp(
+                 currentLuminance,
+                 targetExposure,
+                 adaptationRate
+             );
+
+             // Apply adapted exposure
+             renderer.toneMappingExposure = THREE.MathUtils.clamp(currentLuminance, 0.001, 10.0);
+
+             renderer.render(scene, camera);
+         }
+        </script>
+    </body>
+</html>
