@@ -249,13 +249,21 @@
          let previousMouseY = 0;
          const BASE_FOV = 75;
 
-         document.addEventListener('mousedown', (e) => {
-             isDragging = true;
+	 function handleDown(e) {
+	     isDragging = true;
              previousMouseX = e.clientX;
              previousMouseY = e.clientY;
-         });
+         }
+         document.addEventListener('mousedown', (e) => {
+	     e.preventDefault();
+	     handleDown(e);
+	 } , { passive: false });
+         document.addEventListener('touchstart', (e) => {
+	     e.preventDefault();
+	     handleDown(e.touches[0]);
+	 } , { passive: false });
 
-         document.addEventListener('mousemove', (e) => {
+	 function handleMove(e) {
              if (!isDragging) return;
 
              const deltaX = e.clientX - previousMouseX;
@@ -275,15 +283,26 @@
 
              previousMouseX = e.clientX;
              previousMouseY = e.clientY;
-         });
+         }
+         document.addEventListener('mousemove', (e) => {
+	     e.preventDefault();
+	     handleMove(e)
+	 }, { passive: false });
+         document.addEventListener('touchmove', (e) => {
+	     e.preventDefault();
+	     handleMove(e.touches[0]);
+	 }, { passive: false });
 
-         document.addEventListener('mouseup', () => {
+	 function handleUp(event) {
              isDragging = false;
-         });
+         }
+         document.addEventListener('mouseup', handleUp);
+         document.addEventListener('touchend', handleUp);
+         document.addEventListener('touchcancel', handleUp);
 
          // Add zoom control with mouse wheel
          document.addEventListener('wheel', (e) => {
-             e.preventDefault();
+	     e.preventDefault();
 
              if (e.shiftKey) {
                  // Shift + wheel adjusts exposure
