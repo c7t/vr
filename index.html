@@ -290,6 +290,8 @@
 	 }, { passive: false });
          document.addEventListener('touchmove', (e) => {
 	     e.preventDefault();
+	     // Handle pinch
+	     if (e.touches.length != 1) { isDragging = false; }
 	     handleMove(e.touches[0]);
 	 }, { passive: false });
 
@@ -318,6 +320,44 @@
                  camera.updateProjectionMatrix();
              }
          }, { passive: false });
+
+	 let touchPoints = new Map();
+
+	 function onPointerDown(event) {
+	     touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY });
+	 }
+
+	 // Pointer API for mouse/touch agnostic input.
+	 function onPointerMove(event) {
+	     event.preventDefault();
+	     if (touchPoints.size === 2) {
+		 let points = Array.from(touchPoints.values());
+		 let distBefore = getDistance(points[0], points[1]);
+		 let distNow = getDistance({ x: event.clientX, y: event.clientY }, points[1]);
+		 
+		 let scale = distNow / distBefore;
+		 console.log("Pinch Zoom Scale:", scale);
+		 camera.fov = BASE_FOV / scale;
+		 cameraState.zoom = camera.fov;
+		 camera.updateProjectionMatrix();
+	     }
+
+	     touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY });
+	 }
+
+	 function onPointerUp(event) {
+	     touchPoints.delete(event.pointerId);
+	 }
+
+	 function getDistance(p1, p2) {
+	     let dx = p1.x - p2.x;
+	     let dy = p1.y - p2.y;
+	     return Math.sqrt(dx * dx + dy * dy);
+	 }
+
+	 document.addEventListener("pointerdown", onPointerDown);
+	 document.addEventListener("pointermove", onPointerMove, {passive: false});
+	 document.addEventListener("pointerup", onPointerUp);
 
          // Handle window resize
          window.addEventListener('resize', () => {
