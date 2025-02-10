@@ -46,6 +46,7 @@
          renderer.toneMapping = THREE.ACESFilmicToneMapping;
          renderer.toneMappingExposure = 1.0;
          renderer.outputEncoding = THREE.sRGBEncoding;
+         renderer.domElement.style.touchAction = 'none';
          document.body.appendChild(renderer.domElement);
 
          // Create small render target for luminance sampling
@@ -248,61 +249,12 @@
          let previousMouseX = 0;
          let previousMouseY = 0;
          const BASE_FOV = 75;
-
-	 function handleDown(e) {
-	     isDragging = true;
-             previousMouseX = e.clientX;
-             previousMouseY = e.clientY;
-         }
-         document.addEventListener('mousedown', (e) => {
-	     e.preventDefault();
-	     handleDown(e);
-	 } , { passive: false });
-         document.addEventListener('touchstart', (e) => {
-	     e.preventDefault();
-	     handleDown(e.touches[0]);
-	 } , { passive: false });
-
-	 function handleMove(e) {
-             if (!isDragging) return;
-
-             const deltaX = e.clientX - previousMouseX;
-             const deltaY = e.clientY - previousMouseY;
-
-             const rotationScale = Math.tan(THREE.MathUtils.degToRad(cameraState.zoom) / 2) /
-             Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2);
-
-             cameraState.longitude += deltaX * (rotationScale / 500);
-             cameraState.latitude += deltaY * (rotationScale / 500);
-
-             cameraState.latitude = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, cameraState.latitude));
-
-             camera.rotation.set(0, 0, 0);
-             camera.rotateY(cameraState.longitude);
-             camera.rotateX(cameraState.latitude);
-
-             previousMouseX = e.clientX;
-             previousMouseY = e.clientY;
-         }
-         document.addEventListener('mousemove', (e) => {
-	     e.preventDefault();
-	     handleMove(e)
-	 }, { passive: false });
-         document.addEventListener('touchmove', (e) => {
-	     e.preventDefault();
-	     handleMove(e.touches[0]);
-	 }, { passive: false });
-
-	 function handleUp(event) {
-             isDragging = false;
-         }
-         document.addEventListener('mouseup', handleUp);
-         document.addEventListener('touchend', handleUp);
-         document.addEventListener('touchcancel', handleUp);
+         const MIN_FOV = 20;
+         const MAX_FOV = 110;
 
          // Add zoom control with mouse wheel
          document.addEventListener('wheel', (e) => {
-	     e.preventDefault();
+             e.preventDefault();
 
              if (e.shiftKey) {
                  // Shift + wheel adjusts exposure
@@ -313,11 +265,118 @@
              } else {
                  // Normal wheel adjusts zoom
                  cameraState.zoom += e.deltaY * 0.05;
-                 cameraState.zoom = Math.max(30, Math.min(90, cameraState.zoom));
+                 cameraState.zoom = Math.max(MIN_FOV, Math.min(MAX_FOV, cameraState.zoom));
                  camera.fov = cameraState.zoom;
                  camera.updateProjectionMatrix();
              }
          }, { passive: false });
+
+
+         // Map to track active pointer events
+         const pointers = new Map();
+
+         // Variables to store the initial distance and scale values
+         let initialDistance = 0;
+         let initialScale = 1;
+         let currentScale = 1;
+
+         // Utility function: Calculate the distance between two pointers
+         function getDistance(p1, p2) {
+             const dx = p2.clientX - p1.clientX;
+             const dy = p2.clientY - p1.clientY;
+             return Math.sqrt(dx * dx + dy * dy);
+         }
+
+         // When a pointer goes down, store it and capture the pointer
+         renderer.domElement.addEventListener('pointerdown', (event) => {
+             pointers.set(event.pointerId, event);
+             renderer.domElement.setPointerCapture(event.pointerId);
+
+             if (pointers.size === 1) {
+                 isDragging = true;
+                 previousMouseX = event.clientX;
+                 previousMouseY = event.clientY;
+             }
+
+             // If two pointers are active, record the initial distance between them
+             if (pointers.size === 2) {
+                 const [first, second] = Array.from(pointers.values());
+                 initialDistance = getDistance(first, second);
+             }
+         });
+
+         // On pointer move, update the pointer info and calculate the new scale if two pointers are active
+         renderer.domElement.addEventListener('pointermove', (event) => {
+             if (!pointers.has(event.pointerId)) return;
+             pointers.set(event.pointerId, event);
+
+             if (pointers.size === 1) {
+                 const deltaX = event.clientX - previousMouseX;
+                 const deltaY = event.clientY - previousMouseY;
+
+                 const rotationScale = Math.tan(THREE.MathUtils.degToRad(cameraState.zoom) / 2) /
+                 Math.tan(THREE.MathUtils.degToRad(BASE_FOV) / 2);
+
+                 cameraState.longitude += deltaX * (rotationScale / 500);
+                 cameraState.latitude += deltaY * (rotationScale / 500);
+
+                 cameraState.latitude = Math.max(-Math.PI/2 + 0.01, Math.min(Math.PI/2 - 0.01, cameraState.latitude));
+
+                 camera.rotation.set(0, 0, 0);
+                 camera.rotateY(cameraState.longitude);
+                 camera.rotateX(cameraState.latitude);
+
+                 previousMouseX = event.clientX;
+                 previousMouseY = event.clientY;
+             }
+             if (pointers.size === 2 && initialDistance > 0) {
+                 const [first, second] = Array.from(pointers.values());
+                 const currentDistance = getDistance(first, second);
+
+                 // Determine the new scale factor relative to the
+                 // initial pinch distance
+                 const scaleFactor = currentDistance / initialDistance;
+                 currentScale = initialScale * scaleFactor;
+                 // Clamp currentScale as it can "accumulate" with
+                 // multiple pinches. We want the resulting FOV to be
+                 // [MIN_FOV, MAX_FOV], and see math below
+                 // re. BASE_FOV.
+
+                 // BASE_FOV / currentScale ~= [MIN_FOV, MAX_FOV]
+                 // currentScale ~= BASE_FOV / [MIN_FOV, MAX_FOV]
+                 currentScale = Math.max(BASE_FOV / MAX_FOV, Math.min(BASE_FOV / MIN_FOV, currentScale));
+
+                 cameraState.zoom = BASE_FOV / currentScale;
+                 camera.fov = cameraState.zoom;
+                 camera.updateProjectionMatrix();
+             }
+         });
+
+         // When a pointer is lifted, remove it from our map and update the base scale if needed
+         renderer.domElement.addEventListener('pointerup', (event) => {
+             pointers.delete(event.pointerId);
+             renderer.domElement.releasePointerCapture(event.pointerId);
+
+             // When fewer than two pointers remain, update the initial scale and reset initial distance
+             if (pointers.size < 2) {
+                 initialScale = currentScale;
+                 initialDistance = 0;
+             }
+             if (pointers.size < 1) {
+                 isDragging = false;
+             }
+         });
+
+         // Handle pointer cancellation (if the system cancels the event)
+         renderer.domElement.addEventListener('pointercancel', (event) => {
+             pointers.delete(event.pointerId);
+             renderer.domElement.releasePointerCapture(event.pointerId);
+
+             if (pointers.size < 2) {
+                 initialScale = currentScale;
+                 initialDistance = 0;
+             }
+         });
 
          // Handle window resize
          window.addEventListener('resize', () => {
@@ -380,9 +439,9 @@
              // Sample luminance from current view direction
              // const luminance = xrFrame ? sampleLuminance(luminanceCamera) : sampleLuminance(camera);
              const luminance = sampleLuminance(luminanceCamera);
-             logging_count++;
-             logging_count %= 60;
-             if (!logging_count) { console.log(`sampled luminance ${luminance} target luminance ${cameraState.exposure}`); }
+             // DEBUG: logging_count++;
+             // DEBUG: logging_count %= 60;
+             // DEBUG: if (!logging_count) { console.log(`sampled luminance ${luminance} target luminance ${cameraState.exposure}`); }
 
              // Smoothly adapt exposure
              const targetLuminance = cameraState.exposure;
