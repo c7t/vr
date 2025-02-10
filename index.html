@@ -249,6 +249,8 @@
          let previousMouseX = 0;
          let previousMouseY = 0;
          const BASE_FOV = 75;
+         const MIN_FOV = 20;
+         const MAX_FOV = 110;
 
          // Add zoom control with mouse wheel
          document.addEventListener('wheel', (e) => {
@@ -263,7 +265,7 @@
              } else {
                  // Normal wheel adjusts zoom
                  cameraState.zoom += e.deltaY * 0.05;
-                 cameraState.zoom = Math.max(30, Math.min(90, cameraState.zoom));
+                 cameraState.zoom = Math.max(MIN_FOV, Math.min(MAX_FOV, cameraState.zoom));
                  camera.fov = cameraState.zoom;
                  camera.updateProjectionMatrix();
              }
@@ -331,9 +333,18 @@
                  const [first, second] = Array.from(pointers.values());
                  const currentDistance = getDistance(first, second);
 
-                 // Determine the new scale factor relative to the initial pinch distance
+                 // Determine the new scale factor relative to the
+                 // initial pinch distance
                  const scaleFactor = currentDistance / initialDistance;
                  currentScale = initialScale * scaleFactor;
+                 // Clamp currentScale as it can "accumulate" with
+                 // multiple pinches. We want the resulting FOV to be
+                 // [MIN_FOV, MAX_FOV], and see math below
+                 // re. BASE_FOV.
+
+                 // BASE_FOV / currentScale ~= [MIN_FOV, MAX_FOV]
+                 // currentScale ~= BASE_FOV / [MIN_FOV, MAX_FOV]
+                 currentScale = Math.max(BASE_FOV / MAX_FOV, Math.min(BASE_FOV / MIN_FOV, currentScale));
 
                  cameraState.zoom = BASE_FOV / currentScale;
                  camera.fov = cameraState.zoom;
